@@ -1,0 +1,12 @@
+# Build output
+telegraph-typed-scorer/target/
+dist/
+
+# Local scratch
+__pycache__/
+lb*.json
+intents.json
+e*.json
+
+# Strategy notes, not for publication
+POST.md
