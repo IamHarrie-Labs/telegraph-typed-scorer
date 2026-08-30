@@ -56,7 +56,11 @@ const IDX_COMPOSITE:    usize = 4;
 const W_RELEVANCE:   f32 = 0.25; // cosine(question,     miner_answer)
 const W_CORRECTNESS: f32 = 0.50; // cosine(ground_truth, miner_answer)
 const W_LEXICAL:     f32 = 0.15; // bm25(ground_truth,   miner_answer)
-const W_LENGTH:      f32 = 0.10; // sigmoid length-quality penalty
+const W_LENGTH:      f32 = 0.10;
+
+/// Weight on the numeric reading when the ground truth is prose containing a
+/// number; the remainder goes to the semantic composite.
+const W_NUMERIC:     f32 = 0.92;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Memory helpers (private)
@@ -170,7 +174,8 @@ pub unsafe extern "C" fn rank_answer(
     // yes/no, compare by value. The embedding scorer is blind to magnitude —
     // it cannot tell a price that is $2 out from one that is $20,000 out —
     // so on these intents it scores every miner at the composite floor.
-    if let Some(s) = typed::try_score(ground_truth, miner_answer) {
+    let verdict = typed::assess(ground_truth, miner_answer);
+    if let typed::Verdict::Pure(s) = verdict {
         return s;
     }
 
@@ -178,8 +183,16 @@ pub unsafe extern "C" fn rank_answer(
     // unchanged, so prose scoring is never worse than the baseline.
     let (relevance, correctness, lexical, len_quality) =
         compute_signals(question, ground_truth, miner_answer);
+    let semantic = composite(relevance, correctness, lexical, len_quality);
 
-    composite(relevance, correctness, lexical, len_quality)
+    // A prose ground truth carrying a number gets both signals. Weighted
+    // toward the number, because on a factual question the figure is what is
+    // actually being asked for.
+    if let typed::Verdict::Blend(numeric) = verdict {
+        return math::clamp01(W_NUMERIC * numeric + (1.0 - W_NUMERIC) * semantic);
+    }
+
+    semantic
 }
 
 /// Composite scorer variant for callers that already have `question` and

@@ -37,7 +37,6 @@ pub const TAU: f64 = 0.005;
 /// and left to the semantic scorer, even if they contain a number. Keeps
 /// "the population grew through 2019 across every measured sector" out of
 /// the numeric path.
-const MAX_ALPHA_WORDS: usize = 4;
 
 /// Candidate numbers allowed before an answer is considered to be padding
 /// its chances. Normal structured answers carry a handful (value, timestamp,
@@ -179,23 +178,45 @@ fn from_relative_error(rel: f64) -> f32 {
 /// let the semantic scorer handle it.
 ///
 /// The caller is responsible for rejecting blank answers before this point.
-pub fn try_score(ground_truth: &str, miner_answer: &str) -> Option<f32> {
+/// How the caller should use a typed assessment.
+pub enum Verdict {
+    /// Use this score directly. The ground truth is a bare value, so the
+    /// numeric or boolean comparison is the whole answer.
+    Pure(f32),
+    /// Blend this numeric score with the semantic composite. The ground truth
+    /// is a sentence that contains a number, so both signals carry meaning.
+    ///
+    /// This case exists because Telegraph's own benchmarks state ground truth
+    /// as prose - "the current gas price is approximately 25 gwei" - rather
+    /// than as a bare value. Refusing the numeric path there dropped
+    /// separation from 1.00 to 0.05 and lost a registration.
+    Blend(f32),
+    /// Nothing typed to say; use the semantic composite alone.
+    Semantic,
+}
+
+/// Ground truths longer than this are prose. They still get a numeric reading
+/// when they contain a number, but blended rather than pure.
+const PROSE_ALPHA_WORDS: usize = 4;
+
+pub fn assess(ground_truth: &str, miner_answer: &str) -> Verdict {
     // --- Boolean path -----------------------------------------------------
     // Only fires on a ground truth that is literally yes/no/true/false, so a
     // sentence that merely contains "no" is left alone.
     if let Some(truth) = polarity(ground_truth) {
-        return Some(match answer_polarity(miner_answer) {
-            Some(a) if a == truth => 1.0,
-            Some(_) => 0.0,
-            None => return None,
-        });
+        return match answer_polarity(miner_answer) {
+            Some(a) if a == truth => Verdict::Pure(1.0),
+            Some(_) => Verdict::Pure(0.0),
+            None => Verdict::Semantic,
+        };
     }
 
     // --- Numeric path -----------------------------------------------------
-    if alpha_word_count(ground_truth) > MAX_ALPHA_WORDS {
-        return None;
-    }
-    let truth = numeric::select(ground_truth)?;
+    let is_prose = alpha_word_count(ground_truth) > PROSE_ALPHA_WORDS;
+    let truth = match numeric::select(ground_truth) {
+        Some(t) => t,
+        None => return Verdict::Semantic,
+    };
 
     // Ground truth is numeric, so an answer with no number in it is wrong -
     // not merely unlike the truth. This is the case the baseline rewards
@@ -203,7 +224,11 @@ pub fn try_score(ground_truth: &str, miner_answer: &str) -> Option<f32> {
     // bonus.
     let cand = match numeric::select(miner_answer) {
         Some(c) => c,
-        None => return Some(0.0),
+        // A bare-value question answered without any number is simply wrong.
+        // A prose question is not: the answer may be correct and merely omit
+        // the figure, so let the semantic scorer judge it rather than
+        // punishing it to zero.
+        None => return if is_prose { Verdict::Semantic } else { Verdict::Pure(0.0) },
     };
 
     // Denomination mismatch: equal magnitudes quoted in different currencies
@@ -211,7 +236,7 @@ pub fn try_score(ground_truth: &str, miner_answer: &str) -> Option<f32> {
     // bare answer still inherits the ground truth's denomination.
     if let (Some(t_cur), Some(a_cur)) = (truth.currency, cand.currency) {
         if t_cur != a_cur {
-            return Some(0.0);
+            return Verdict::Pure(0.0);
         }
     }
 
@@ -241,11 +266,17 @@ pub fn try_score(ground_truth: &str, miner_answer: &str) -> Option<f32> {
         score = (score as f64 / (1.0 + 0.35 * extra)) as f32;
     }
 
-    Some(if score > 1.0 {
+    let score = if score > 1.0 {
         1.0
     } else if score < 0.0 || !score.is_finite() {
         0.0
     } else {
         score
-    })
+    };
+
+    if is_prose {
+        Verdict::Blend(score)
+    } else {
+        Verdict::Pure(score)
+    }
 }
