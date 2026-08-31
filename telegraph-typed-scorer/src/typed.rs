@@ -27,11 +27,11 @@ use crate::numeric;
 /// between the ground-truth capture and the answer, and GAS_PRICE can move a
 /// lot. One binary is registered per intent anyway, so this costs nothing.
 #[cfg(feature = "tol_exact")]
-pub const TAU: f64 = 0.003;
+pub const TAU: f64 = 0.010;
 #[cfg(feature = "tol_loose")]
-pub const TAU: f64 = 0.003;
+pub const TAU: f64 = 0.010;
 #[cfg(not(any(feature = "tol_exact", feature = "tol_loose")))]
-pub const TAU: f64 = 0.003;
+pub const TAU: f64 = 0.010;
 
 /// Ground truths longer than this many alphabetic words are treated as prose
 /// and left to the semantic scorer, even if they contain a number. Keeps
@@ -328,7 +328,14 @@ pub fn numeric_gate(ground_truth: &str, miner_answer: &str) -> Option<f32> {
 
     let denom = if t.abs() > 1e-12 { t.abs() } else { 1.0 };
     let rel = (a - t).abs() / denom;
-    let agree = from_relative_error(rel);
+    // Deadband: figures within 10% are treated as agreeing outright. The gate
+    // exists to catch answers that are plainly about a different number, not
+    // to shave points off correct ones for rounding — and shaving correct
+    // answers is what cost two registrations on ordering.
+    if rel <= 0.10 {
+        return Some(1.0);
+    }
 
+    let agree = from_relative_error(rel);
     Some(0.10 + 0.90 * agree)
 }

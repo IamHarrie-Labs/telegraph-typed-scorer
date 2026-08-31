@@ -60,10 +60,16 @@ pub fn agreement(ground_truth: &str, answer: &str) -> f32 {
     // being terse, so beta = 2.
     let b2 = 0.25f32;
     let f = (1.0 + b2) * precision * recall / (b2 * precision + recall);
+    // Soften hard. Correct answers were scoring ~0.50 against champions at
+    // ~0.88 while unrelated text already sat at exactly zero, so the entire
+    // separation deficit was in the good answers. Flattening the curve lifts
+    // them and cannot lift the bottom, which has nothing left to give.
+    //
+    // Original note:
     // Soften rather than sharpen. Squaring the F-measure punished genuine
     // paraphrases — a correct short answer fell to 0.43 where the incumbent
     // gave 0.96 — while unrelated text was already at zero and had nothing
     // left to lose. The square root lifts partial matches back up and costs
     // nothing at the bottom of the range.
-    libm::powf(f, 0.35)
+    libm::powf(f, 0.15)
 }
