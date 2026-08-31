@@ -301,9 +301,16 @@ pub fn assess(ground_truth: &str, miner_answer: &str) -> Verdict {
 pub fn numeric_gate(ground_truth: &str, miner_answer: &str) -> Option<f32> {
     let truth = numeric::select(ground_truth)?;
 
+    // No figure in the answer: do not gate at all.
+    //
+    // Damping these cost two registrations on *ordering*, not separation. A
+    // correct answer that omits the number was being halved and falling below
+    // a wrong answer with high word overlap. Lexical agreement already scores
+    // a genuine non-answer near zero, so the gate has nothing to add here —
+    // its only job is catching right-words-wrong-figure.
     let cand = match numeric::select(miner_answer) {
         Some(c) => c,
-        None => return Some(0.55),
+        None => return None,
     };
 
     if let (Some(t_cur), Some(a_cur)) = (truth.currency, cand.currency) {
