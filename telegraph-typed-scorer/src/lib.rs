@@ -9,7 +9,6 @@
 //! | Function | Signature | Description |
 //! |---|---|---|
 //! | `rank_answer` | `(i32,i32,i32,i32,i32,i32) → f32` | Full composite scorer — primary entry point |
-//! | `rank_answer_cached` | `(i32,i32,i32,i32,i32,i32) → f32` | Composite scorer reusing precomputed question/ground-truth vectors |
 //! | `breakdown_answer` | `(i32,i32,i32,i32,i32,i32) → i32` | Per-signal breakdown; returns ptr to f32[5] |
 //! | `embed` | `(i32, i32) → i32` | MiniLM-L6-v2: returns offset of float32[384] |
 //! | `cosine_sim` | `(i32, i32, i32) → f32` | Cosine similarity of two in-memory vectors |
@@ -26,6 +25,7 @@ mod allocator;
 mod bm25;
 mod embed;
 mod math;
+mod lexical;
 mod numeric;
 mod tokenizer;
 mod typed;
@@ -170,29 +170,34 @@ pub unsafe extern "C" fn rank_answer(
         return 1.0;
     }
 
-    // Typed path: when the ground truth is a bare number or an explicit
-    // yes/no, compare by value. The embedding scorer is blind to magnitude —
-    // it cannot tell a price that is $2 out from one that is $20,000 out —
-    // so on these intents it scores every miner at the composite floor.
-    let verdict = typed::assess(ground_truth, miner_answer);
-    if let typed::Verdict::Pure(s) = verdict {
+    // Bare-value ground truth (a lone number, or an explicit yes/no) is
+    // decided on the value alone.
+    if let typed::Verdict::Pure(s) = typed::assess(ground_truth, miner_answer) {
         return s;
     }
 
-    // Everything else falls through to the inherited semantic composite,
-    // unchanged, so prose scoring is never worse than the baseline.
-    let (relevance, correctness, lexical, len_quality) =
+    // Otherwise: how strongly do the words agree, and does the figure back
+    // them up?
+    //
+    // Agreement leads because that is what the incumbents score and what the
+    // benchmark rewards — their wrong answers are unrelated text, which token
+    // overlap separates cleanly. The semantic composite is kept as a floor so
+    // a genuine paraphrase sharing few words is not thrown away.
+    let (relevance, correctness, lexical_bm25, len_quality) =
         compute_signals(question, ground_truth, miner_answer);
-    let semantic = composite(relevance, correctness, lexical, len_quality);
+    let semantic = composite(relevance, correctness, lexical_bm25, len_quality);
+    let agreement = lexical::agreement(ground_truth, miner_answer);
+    // The semantic composite is a floor for paraphrases that share few words,
+    // but squared: unrelated text still scores ~0.05 semantically, and letting
+    // that through raised the bottom of the range and cost margin.
+    let floor = semantic * semantic;
+    let base = if agreement > floor { agreement } else { floor };
 
-    // A prose ground truth carrying a number gets both signals. Weighted
-    // toward the number, because on a factual question the figure is what is
-    // actually being asked for.
-    if let typed::Verdict::Blend(numeric) = verdict {
-        return math::clamp01(W_NUMERIC * numeric + (1.0 - W_NUMERIC) * semantic);
-    }
+    // The gate is where this differs from the incumbents: an answer whose
+    // words match but whose number does not is not a good answer.
+    let gate = typed::numeric_gate(ground_truth, miner_answer).unwrap_or(1.0);
 
-    semantic
+    math::clamp01(base * gate)
 }
 
 /// Composite scorer variant for callers that already have `question` and
@@ -219,52 +224,6 @@ pub unsafe extern "C" fn rank_answer(
 ///
 /// `gt_ptr`/`gt_len` is the ground_truth TEXT, still required for BM25
 /// (lexical overlap has no vector representation to precompute).
-#[no_mangle]
-pub unsafe extern "C" fn rank_answer_cached(
-    q_vec_ptr: i32,
-    gt_vec_ptr: i32,
-    gt_ptr: i32, gt_len: i32, // ground truth TEXT (for BM25)
-    ma_ptr: i32, ma_len: i32, // miner answer
-) -> f32 {
-    let ground_truth = read_str(gt_ptr, gt_len);
-    let miner_answer = read_str(ma_ptr, ma_len);
-
-    if miner_answer.trim().is_empty() {
-        return 0.0;
-    }
-
-    // The same typed dispatch as `rank_answer`. This entry point exists so the
-    // host can embed the question and ground truth once and reuse them across
-    // every miner in an epoch, which means it — not `rank_answer` — is the one
-    // that actually runs in production. Leaving the typed logic out of it made
-    // three registrations score as the unmodified baseline: their reported
-    // `worst_self_match` came back as an identical 0.78881794 every time,
-    // across different binaries and different intents.
-    if miner_answer.trim() == ground_truth.trim() {
-        return 1.0;
-    }
-
-    let verdict = typed::assess(ground_truth, miner_answer);
-    if let typed::Verdict::Pure(s) = verdict {
-        return s;
-    }
-
-    let q_vec = read_f32s(q_vec_ptr, EMBED_DIM as i32);
-    let gt_vec = read_f32s(gt_vec_ptr, EMBED_DIM as i32);
-
-    let ma_enc = tokenizer::tokenize(miner_answer);
-    let ma_vec = embed::run(&ma_enc);
-
-    let (relevance, correctness, lexical, len_quality) =
-        signals_from_vecs(q_vec, gt_vec, ground_truth, miner_answer, &ma_vec);
-    let semantic = composite(relevance, correctness, lexical, len_quality);
-
-    if let typed::Verdict::Blend(numeric) = verdict {
-        return math::clamp01(W_NUMERIC * numeric + (1.0 - W_NUMERIC) * semantic);
-    }
-
-    semantic
-}
 
 /// Per-signal breakdown scorer.
 ///

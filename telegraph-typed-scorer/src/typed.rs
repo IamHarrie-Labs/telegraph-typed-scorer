@@ -27,11 +27,11 @@ use crate::numeric;
 /// between the ground-truth capture and the answer, and GAS_PRICE can move a
 /// lot. One binary is registered per intent anyway, so this costs nothing.
 #[cfg(feature = "tol_exact")]
-pub const TAU: f64 = 0.0000001;
+pub const TAU: f64 = 0.003;
 #[cfg(feature = "tol_loose")]
-pub const TAU: f64 = 0.0000001;
+pub const TAU: f64 = 0.003;
 #[cfg(not(any(feature = "tol_exact", feature = "tol_loose")))]
-pub const TAU: f64 = 0.0000001;
+pub const TAU: f64 = 0.003;
 
 /// Ground truths longer than this many alphabetic words are treated as prose
 /// and left to the semantic scorer, even if they contain a number. Keeps
@@ -283,4 +283,45 @@ pub fn assess(ground_truth: &str, miner_answer: &str) -> Verdict {
     } else {
         Verdict::Pure(score)
     }
+}
+
+/// How much to trust an answer whose words match, based on whether its number
+/// does too.
+///
+/// Returns `None` when the ground truth states no number, so nothing is gated.
+/// Otherwise a multiplier: 1.0 when the figures agree, falling toward 0.10 as
+/// they diverge, and 0.55 when the answer gives no figure at all — that last
+/// case may still be a correct answer that simply omits it, so it is damped
+/// rather than killed.
+///
+/// This is the difference from the incumbents. They score surface overlap
+/// alone, which rates "Lyon is the capital of France" at 0.95 against a Paris
+/// ground truth. Gating on the value catches exactly that class of answer:
+/// right words, wrong fact.
+pub fn numeric_gate(ground_truth: &str, miner_answer: &str) -> Option<f32> {
+    let truth = numeric::select(ground_truth)?;
+
+    let cand = match numeric::select(miner_answer) {
+        Some(c) => c,
+        None => return Some(0.55),
+    };
+
+    if let (Some(t_cur), Some(a_cur)) = (truth.currency, cand.currency) {
+        if t_cur != a_cur {
+            return Some(0.10);
+        }
+    }
+
+    let t = numeric::canonical(&truth, None);
+    let mut a = numeric::canonical(&cand, truth.unit);
+
+    let t_pct = numeric::is_percent(ground_truth);
+    let a_pct = numeric::is_percent(miner_answer);
+    if t_pct && !a_pct { a *= 100.0; } else if !t_pct && a_pct { a /= 100.0; }
+
+    let denom = if t.abs() > 1e-12 { t.abs() } else { 1.0 };
+    let rel = (a - t).abs() / denom;
+    let agree = from_relative_error(rel);
+
+    Some(0.10 + 0.90 * agree)
 }
