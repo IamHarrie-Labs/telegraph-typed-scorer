@@ -233,6 +233,22 @@ pub unsafe extern "C" fn rank_answer_cached(
         return 0.0;
     }
 
+    // The same typed dispatch as `rank_answer`. This entry point exists so the
+    // host can embed the question and ground truth once and reuse them across
+    // every miner in an epoch, which means it — not `rank_answer` — is the one
+    // that actually runs in production. Leaving the typed logic out of it made
+    // three registrations score as the unmodified baseline: their reported
+    // `worst_self_match` came back as an identical 0.78881794 every time,
+    // across different binaries and different intents.
+    if miner_answer.trim() == ground_truth.trim() {
+        return 1.0;
+    }
+
+    let verdict = typed::assess(ground_truth, miner_answer);
+    if let typed::Verdict::Pure(s) = verdict {
+        return s;
+    }
+
     let q_vec = read_f32s(q_vec_ptr, EMBED_DIM as i32);
     let gt_vec = read_f32s(gt_vec_ptr, EMBED_DIM as i32);
 
@@ -241,8 +257,13 @@ pub unsafe extern "C" fn rank_answer_cached(
 
     let (relevance, correctness, lexical, len_quality) =
         signals_from_vecs(q_vec, gt_vec, ground_truth, miner_answer, &ma_vec);
+    let semantic = composite(relevance, correctness, lexical, len_quality);
 
-    composite(relevance, correctness, lexical, len_quality)
+    if let typed::Verdict::Blend(numeric) = verdict {
+        return math::clamp01(W_NUMERIC * numeric + (1.0 - W_NUMERIC) * semantic);
+    }
+
+    semantic
 }
 
 /// Per-signal breakdown scorer.

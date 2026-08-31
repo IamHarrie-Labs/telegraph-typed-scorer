@@ -27,11 +27,11 @@ use crate::numeric;
 /// between the ground-truth capture and the answer, and GAS_PRICE can move a
 /// lot. One binary is registered per intent anyway, so this costs nothing.
 #[cfg(feature = "tol_exact")]
-pub const TAU: f64 = 0.004;
+pub const TAU: f64 = 0.0000001;
 #[cfg(feature = "tol_loose")]
-pub const TAU: f64 = 0.006;
+pub const TAU: f64 = 0.0000001;
 #[cfg(not(any(feature = "tol_exact", feature = "tol_loose")))]
-pub const TAU: f64 = 0.006;
+pub const TAU: f64 = 0.0000001;
 
 /// Ground truths longer than this many alphabetic words are treated as prose
 /// and left to the semantic scorer, even if they contain a number. Keeps
@@ -232,7 +232,7 @@ pub fn assess(ground_truth: &str, miner_answer: &str) -> Verdict {
         // Sending these to the semantic scorer was too lenient: it let a
         // fluent, numberless non-answer keep a mid-range score and collapsed
         // the separation the promotion gate measures.
-        None => return if is_prose { Verdict::Semantic } else { Verdict::Pure(0.0) },
+        None => return if is_prose { Verdict::Blend(0.0) } else { Verdict::Pure(0.0) },
     };
 
     // Denomination mismatch: equal magnitudes quoted in different currencies
