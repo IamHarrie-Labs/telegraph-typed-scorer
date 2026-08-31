@@ -27,11 +27,11 @@ use crate::numeric;
 /// between the ground-truth capture and the answer, and GAS_PRICE can move a
 /// lot. One binary is registered per intent anyway, so this costs nothing.
 #[cfg(feature = "tol_exact")]
-pub const TAU: f64 = 0.010;
+pub const TAU: f64 = 0.0051;
 #[cfg(feature = "tol_loose")]
-pub const TAU: f64 = 0.010;
+pub const TAU: f64 = 0.0051;
 #[cfg(not(any(feature = "tol_exact", feature = "tol_loose")))]
-pub const TAU: f64 = 0.010;
+pub const TAU: f64 = 0.0051;
 
 /// Ground truths longer than this many alphabetic words are treated as prose
 /// and left to the semantic scorer, even if they contain a number. Keeps
