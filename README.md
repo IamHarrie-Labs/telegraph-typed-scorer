@@ -1,13 +1,23 @@
+<div align="center">
+
 # Telegraph Typed Scorer
 
-A WASM scoring module for [Telegraph Protocol](https://telegraphprotocol.com/)
-that compares numeric answers **as numbers**.
+### Scores numeric answers as numbers, not as prose
 
-Telegraph's scoring modules decide which miners get paid. The reference module
-scores an answer by embedding similarity plus word overlap plus a length bonus.
-That works on prose and fails on numbers: the word-overlap term splits text on
-non-alphanumerics, so `111240.55 USD` and `111238.02` share no token at all. A
-price two dollars out is, to that scorer, as wrong as a poem.
+[![candidate_margin: 7.3x baseline](https://img.shields.io/badge/candidate_margin-7.3x_baseline-8b6a27)](#results)
+[![wins: 394/394](https://img.shields.io/badge/wins-394%2F394-555555)](#results)
+[![worst_self_match: 1.0000](https://img.shields.io/badge/worst_self_match-1.0000-555555)](#results)
+[![Real MiniLM-L6-v2 weights, not mocks](https://img.shields.io/badge/weights-real_MiniLM--L6--v2-555555)](telegraph-typed-scorer/weights/)
+
+A WASM scoring module for [Telegraph Protocol](https://telegraphprotocol.com/) that compares numeric answers **as numbers**.
+
+Telegraph's scoring modules decide which miners get paid. The reference module scores an answer by embedding similarity plus word overlap plus a length bonus. That works on prose and fails on numbers: the word-overlap term splits text on non-alphanumerics, so `111240.55 USD` and `111238.02` share no token at all. A price two dollars out is, to that scorer, as wrong as a poem.
+
+[The result](#results) · [Reproduce it](#reproducing) · [How it scores](#how-it-scores) · [Gaming resistance](#gaming-resistance) · [Known limitations](#known-limitations) · [Registration](REGISTRATION.md)
+
+</div>
+
+---
 
 This module adds one thing. If the ground truth is a number, compare the values
 and score by relative error. If it isn't, fall through to the inherited
@@ -17,6 +27,15 @@ That fallback is the design. Telegraph promotes a candidate only if it beats the
 incumbent on a hidden benchmark. By leaving prose scoring byte-identical, this
 module can only tie or beat the baseline there, while the typed path is pure
 upside on the intents the baseline scores at its floor.
+
+## Contents
+
+- [Results](#results)
+- [Reproducing](#reproducing)
+- [How it scores](#how-it-scores)
+- [Gaming resistance](#gaming-resistance)
+- [Known limitations](#known-limitations)
+- [Layout](#layout)
 
 ## Results
 
@@ -65,9 +84,11 @@ rustup target add wasm32-unknown-unknown
 pip install wasmtime
 
 # the candidate
+cd telegraph-typed-scorer
 cargo build --release --target wasm32-unknown-unknown --features real_weights
+cd ..
 
-# the baseline, from telegraphprotocol/telegraph-wasm-baseline
+# the baseline, cloned separately from telegraphprotocol/telegraph-wasm-baseline
 cargo build --release --target wasm32-unknown-unknown --features real_weights
 
 python bench.py <baseline.wasm> <candidate.wasm>
@@ -150,7 +171,7 @@ telegraph-typed-scorer/
 cases.py           the 394-case corpus
 bench.py           head-to-head harness
 vet.py             integrity checks: statelessness, harness sanity, hand-checked math
-dist/              the three built binaries
+dist/              where `cargo build` places the compiled .wasm (gitignored, built locally, not shipped)
 REGISTRATION.md    hashes and on-chain registration steps
 ```
 
